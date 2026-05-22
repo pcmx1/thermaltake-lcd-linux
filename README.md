@@ -9,7 +9,7 @@ Displays live CPU/GPU/NVMe temperatures, CPU load, and RAM usage on:
 | Thermaltake RC Pro (Tower 500 / 900) | 3.9" rectangular, 480×128 | `tt-lcd-rc-pro.py` |
 | Thermaltake AIO cooler LCD | Round, 480×480 | `tt-lcd-aio.py` |
 
-![RC Pro showing CPU 74.1° GPU 49.0°](https://github.com/pcmx1/thermaltake-lcd-linux/raw/main/doc/rc-pro-preview.jpg)
+![RC Pro 3.9" display](https://github.com/pcmx1/thermaltake-lcd-linux/raw/main/doc/rc-pro-preview.png) ![AIO round display](https://github.com/pcmx1/thermaltake-lcd-linux/raw/main/doc/aio-preview.png)
 
 ---
 
