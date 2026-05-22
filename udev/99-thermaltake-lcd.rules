@@ -1,0 +1,11 @@
+# Thermaltake LCD controllers — grant rw access to the plugdev group
+# Install: sudo cp 99-thermaltake-lcd.rules /etc/udev/rules.d/
+#          sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# RC Pro 3.9" (264a:232a)
+SUBSYSTEM=="usb",    ATTRS{idVendor}=="264a", ATTRS{idProduct}=="232a", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="232a", MODE="0660", GROUP="plugdev"
+
+# AIO cooler LCD (264a:2328)
+SUBSYSTEM=="usb",    ATTRS{idVendor}=="264a", ATTRS{idProduct}=="2328", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="2328", MODE="0660", GROUP="plugdev"

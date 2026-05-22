@@ -1,0 +1,13 @@
+[Unit]
+Description=Thermaltake AIO LCD temperature monitor
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/python3 %h/thermaltake-lcd-linux/tt-lcd-aio.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
