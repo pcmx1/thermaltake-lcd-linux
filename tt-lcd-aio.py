@@ -3,7 +3,7 @@
 Thermaltake AIO LCD — native Linux controller
 ==============================================
 Display:  480 × 480 px (round, circular aperture)
-Device:   USB HID 264a:2328  →  /dev/hidraw*  (auto-detected)
+Device:   USB HID 264a:2328/233c  →  /dev/hidraw*  (auto-detected)
 Protocol: JPEG split into 1016-byte HID Output Report chunks
 
 Init sequence (from USB capture analysis):
@@ -32,11 +32,20 @@ from datetime import datetime
 W, H     = 480, 480
 CHUNK    = 1016
 INTERVAL = 2          # seconds between frame updates
+AUTO_USB_RESET = os.environ.get('TT_LCD_AUTO_RESET') == '1'
+INIT_MODE = os.environ.get('TT_LCD_INIT_MODE', 'feature')
+REPORT_MODE = os.environ.get('TT_LCD_REPORT_MODE', 'legacy')
+RUN_ONCE = '--once' in sys.argv
+CHECK_ONLY = '--check' in sys.argv
+CONTROL_REPORT_SIZE = 440
+DATA_INTERFACE = int(os.environ.get('TT_LCD_DATA_INTERFACE', '1'))
+CONTROL_INTERFACE = int(os.environ.get('TT_LCD_CONTROL_INTERFACE', '0'))
 
 FONT_L = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 FONT_R = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
 
-USB_VID, USB_PID = 0x264a, 0x2328   # Thermaltake AIO
+USB_VID = 0x264a
+USB_PIDS = (0x233c, 0x2328)   # Thermaltake round/AIO LCDs
 
 # ── HID ioctl numbers (/usr/include/linux/hidraw.h) ───────────────────────────
 HIDIOCSFEATURE = lambda n: (3 << 30) | (n << 16) | (0x48 << 8) | 0x06
@@ -52,25 +61,53 @@ assert all(len(c) == 64 for c in (CMD_1A, CMD_0C_480, CMD_0C_NEXT))
 
 # ── Device discovery ──────────────────────────────────────────────────────────
 
-def find_hidraw(vendor=USB_VID, product=USB_PID):
-    """Return the /dev/hidraw* path for the given USB VID:PID, or None."""
+def supported_usb_ids():
+    return ', '.join(f'{USB_VID:04x}:{pid:04x}' for pid in USB_PIDS)
+
+
+def hid_uevent_matches(uevent, vendor, product):
+    uevent = uevent.upper()
+    return (
+        f'{vendor:04X}:{product:04X}' in uevent or
+        f'{vendor:08X}:{product:08X}' in uevent or
+        f'V{vendor:08X}P{product:08X}' in uevent
+    )
+
+
+def hidraw_interface_number(path):
+    try:
+        with open(os.path.join(path, 'device', '..', 'bInterfaceNumber')) as f:
+            return int(f.read().strip(), 16)
+    except Exception:
+        return -1
+
+
+def find_hidraw(vendor=USB_VID, products=USB_PIDS, preferred_interface=1):
+    """Return the /dev/hidraw* path for the supported USB VID:PIDs, or None."""
+    matches = []
     for path in glob.glob('/sys/class/hidraw/hidraw*'):
         try:
             uevent = open(os.path.join(path, 'device', 'uevent')).read()
-            if f'{vendor:04X}:{product:04X}' in uevent.upper():
-                return '/dev/' + os.path.basename(path)
+            if any(hid_uevent_matches(uevent, vendor, product) for product in products):
+                matches.append((hidraw_interface_number(path), '/dev/' + os.path.basename(path)))
         except Exception:
             pass
-    return None
+    if not matches:
+        return None
+    for interface, dev_path in sorted(matches, reverse=True):
+        if interface == preferred_interface:
+            return dev_path
+    matches.sort(reverse=True)
+    return matches[0][1]
 
 
-def find_usb_addr(vendor=USB_VID, product=USB_PID):
+def find_usb_addr(vendor=USB_VID, products=USB_PIDS):
     """Return (bus, devnum) for USB reset, or (None, None)."""
     base = '/sys/bus/usb/devices'
     for entry in os.listdir(base):
         try:
             txt = open(os.path.join(base, entry, 'uevent')).read()
-            if f'{vendor:04x}/{product:04x}' in txt:
+            if any(f'{vendor:04x}/{product:04x}' in txt for product in products):
                 bus = int(open(os.path.join(base, entry, 'busnum')).read())
                 dev = int(open(os.path.join(base, entry, 'devnum')).read())
                 return bus, dev
@@ -106,11 +143,48 @@ def hid_get_feature(fd, report_id=0x0f):
     return bytes(buf)
 
 
+def output_report(data, size):
+    report = data.ljust(size, b'\x00')[:size]
+    if REPORT_MODE == 'zero-prefix':
+        return b'\x00' + report
+    if REPORT_MODE == 'zero-strip':
+        return b'\x00' + report[1:]
+    return report
+
+
+def hid_write_control(fd, data, label):
+    os.write(fd, output_report(data, CONTROL_REPORT_SIZE))
+    print(label, end=' ', flush=True)
+
+
+def close_fds(*fds):
+    closed_fds = set()
+    for fd in fds:
+        try:
+            if fd is not None and fd not in closed_fds:
+                os.close(fd)
+                closed_fds.add(fd)
+        except Exception:
+            pass
+
+
 def init_display(fd):
     """
     One-time init sequence.  Write chunks immediately after — no CMD_1D
     required for the AIO (unlike the RC Pro).
     """
+    if INIT_MODE == 'raw':
+        print('  [init raw/no-feature] →', end='', flush=True)
+        return
+
+    if INIT_MODE == 'output':
+        print('  [init output]', end=' ', flush=True)
+        hid_write_control(fd, CMD_1A, '1a');  time.sleep(0.05)
+        for _ in range(3):
+            hid_write_control(fd, CMD_0C_480, '0c');  time.sleep(0.02)
+        print('→', end='', flush=True)
+        return
+
     print('  [init]', end=' ', flush=True)
     hid_set_feature(fd, CMD_1A);  time.sleep(0.05);  print('1a', end=' ', flush=True)
     try:
@@ -131,6 +205,14 @@ def init_display(fd):
 
 def begin_next_frame(fd):
     """Per-frame handshake for frame 2 onwards."""
+    if INIT_MODE == 'raw':
+        return
+
+    if INIT_MODE == 'output':
+        hid_write_control(fd, CMD_0C_NEXT, 'next')
+        time.sleep(0.02)
+        return
+
     try:
         hid_get_feature(fd, 0x0f)
     except Exception:
@@ -165,7 +247,7 @@ def send_chunks(fd, jpeg_bytes):
         else:
             hdr = bytes([0x02, 0x09, 0x00, 0x00, 0xf8, 0x03,
                          idx & 0xff, (idx >> 8) & 0xff])
-        os.write(fd, hdr + data[i:i + CHUNK])
+        os.write(fd, output_report(hdr + data[i:i + CHUNK], CHUNK + 8))
 
 
 # ── Sensor helpers ────────────────────────────────────────────────────────────
@@ -297,38 +379,70 @@ def encode_jpeg(img):
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def main():
-    hidraw = find_hidraw()
-    if hidraw is None:
-        print(f'ERROR: Thermaltake AIO (USB {USB_VID:04x}:{USB_PID:04x}) not found.')
+    data_hidraw = find_hidraw(preferred_interface=DATA_INTERFACE)
+    control_hidraw = find_hidraw(preferred_interface=CONTROL_INTERFACE) or data_hidraw
+    if data_hidraw is None:
+        print(f'ERROR: Thermaltake AIO/Round LCD (USB {supported_usb_ids()}) not found.')
         print('       Check udev rules and that the device is connected.')
         sys.exit(1)
 
-    print(f'tt-lcd-aio: {hidraw}  {W}×{H}  update={INTERVAL}s')
+    if CHECK_ONLY:
+        print(f'tt-lcd-aio: control={control_hidraw} data={data_hidraw}')
+        failed = False
+        for role, path in (('control', control_hidraw), ('data', data_hidraw)):
+            if not os.path.exists(path):
+                print(f'ERROR: {role} node does not exist: {path}')
+                failed = True
+            elif not os.access(path, os.R_OK | os.W_OK):
+                print(f'ERROR: {role} node is not readable and writable: {path}')
+                failed = True
+        if failed:
+            sys.exit(1)
+        print('Device discovery and permissions look usable; no reports were sent.')
+        return
+
+    mode = f'once, init={INIT_MODE}, report={REPORT_MODE}' if RUN_ONCE else f'update={INTERVAL}s, init={INIT_MODE}, report={REPORT_MODE}'
+    if control_hidraw != data_hidraw:
+        print(f'tt-lcd-aio: control={control_hidraw} data={data_hidraw}  {W}×{H}  {mode}')
+    else:
+        print(f'tt-lcd-aio: {data_hidraw}  {W}×{H}  {mode}')
     psutil.cpu_percent()   # warm-up call (first call always returns 0.0)
     time.sleep(0.5)
 
-    fd = None
+    control_fd = None
+    data_fd = None
     first_frame        = True
     consecutive_errors = 0
 
     while True:
         try:
-            if fd is None:
-                if not os.path.exists(hidraw):
-                    raise FileNotFoundError(f'{hidraw} not found')
-                fd = os.open(hidraw, os.O_RDWR)
+            if data_fd is None:
+                if not os.path.exists(data_hidraw):
+                    raise FileNotFoundError(f'{data_hidraw} not found')
+                data_fd = os.open(data_hidraw, os.O_RDWR)
+                if INIT_MODE in ('feature', 'output'):
+                    if not os.path.exists(control_hidraw):
+                        raise FileNotFoundError(f'{control_hidraw} not found')
+                    control_fd = os.open(control_hidraw, os.O_RDWR)
+                else:
+                    control_fd = data_fd
                 first_frame = True
 
             jpeg = encode_jpeg(make_frame())
 
             if first_frame:
-                init_display(fd)
-                send_chunks(fd, jpeg)
+                init_display(control_fd)
+                send_chunks(data_fd, jpeg)
                 first_frame = False
                 print('OK')
             else:
-                begin_next_frame(fd)
-                send_chunks(fd, jpeg)
+                begin_next_frame(control_fd)
+                send_chunks(data_fd, jpeg)
+
+            if RUN_ONCE:
+                print('\n  Sent one frame; exiting.')
+                close_fds(data_fd, control_fd)
+                return
 
             t   = psutil.sensors_temperatures()
             cpu = next((e.current for e in t.get('k10temp', []) if e.label == 'Tctl'), 0)
@@ -342,12 +456,15 @@ def main():
         except (TimeoutError, OSError) as e:
             consecutive_errors += 1
             print(f'\n  Error #{consecutive_errors}: {e}')
-            if fd is not None:
-                try: os.close(fd)
-                except Exception: pass
-                fd = None
+            close_fds(data_fd, control_fd)
+            data_fd = None
+            control_fd = None
 
-            if consecutive_errors >= 2:
+            if RUN_ONCE:
+                print('  One-shot probe failed; exiting.')
+                raise SystemExit(1)
+
+            if consecutive_errors >= 2 and AUTO_USB_RESET:
                 print('  Attempting USB reset...')
                 bus, dev = find_usb_addr()
                 if bus:
@@ -357,10 +474,16 @@ def main():
                 else:
                     print('  Could not locate USB device for reset')
                     time.sleep(5)
+            elif consecutive_errors >= 2:
+                print('  USB reset disabled; set TT_LCD_AUTO_RESET=1 to enable it.')
+                time.sleep(5)
 
         except Exception as e:
             print(f'\n  Unexpected error: {e}')
             import traceback; traceback.print_exc()
+            if RUN_ONCE:
+                print('  One-shot probe failed; exiting.')
+                raise SystemExit(1)
             time.sleep(2)
 
 

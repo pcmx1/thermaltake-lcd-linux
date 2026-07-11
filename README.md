@@ -6,8 +6,8 @@ Displays live CPU/GPU/NVMe temperatures, CPU load, and RAM usage on:
 
 | Device | Display | Script |
 |---|---|---|
-| Thermaltake RC Pro (Tower 500 / 900) | 3.9" rectangular, 480×128 | `tt-lcd-rc-pro.py` |
-| Thermaltake AIO cooler LCD | Round, 480×480 | `tt-lcd-aio.py` |
+| Thermaltake RC Pro / Bar TFT (`264a:232a`, `264a:233d`) | 3.9" rectangular, 480×128 | `tt-lcd-rc-pro.py` |
+| Thermaltake AIO / Round TFT (`264a:2328`, `264a:233c`) | Round, 480×480 | `tt-lcd-aio.py` |
 
 ![RC Pro 3.9" display](https://github.com/pcmx1/thermaltake-lcd-linux/raw/main/doc/rc-pro-preview.png) ![AIO round display](https://github.com/pcmx1/thermaltake-lcd-linux/raw/main/doc/aio-preview.png)
 
@@ -22,7 +22,7 @@ These devices are standard USB HID devices. The Windows software sends JPEG fram
 - **Last-chunk flag**: byte 3 of the header must be `0x01` on the final chunk (with the actual trailing byte count in bytes 4–5); the display renders only after receiving this flag
 - **Timing** (RC Pro only): chunks must be written on the same open fd immediately after the `0x1d` SET_REPORT — any gap causes the interrupt OUT endpoint to NAK and time out
 
-Both scripts are pure Python, require no kernel modules or special privileges beyond `plugdev` group membership, and auto-detect the hidraw device by USB VID:PID.
+Both scripts are pure Python, require no kernel modules, and auto-detect the control and data hidraw interfaces by USB VID:PID. The included udev rules request access for the active desktop user and retain `plugdev` as a fallback group.
 
 ### RC Pro init sequence
 ```
@@ -56,7 +56,7 @@ Bytes 8+:  1016 bytes  JPEG data (zero-padded on last chunk)
 - Linux (tested on Ubuntu 24.04, kernel 6.x)
 - Python 3.8+
 - `Pillow` and `psutil` Python packages
-- User in the `plugdev` group
+- Device access through the included udev rules (`uaccess` for the active desktop user, with `plugdev` as a fallback)
 
 ### Sensor support
 
@@ -81,21 +81,29 @@ bash install.sh
 ```
 
 The install script:
-1. Installs Python dependencies (`pip install --user`)
+1. Creates `.venv/` and installs Python dependencies there
 2. Copies udev rules and reloads them (`sudo` required for this step only)
-3. Installs and enables systemd user services for any detected devices
+3. Installs systemd user services that use the virtual environment
+4. Enables and starts services for detected devices
+
+To install without enabling or starting either display service:
+
+```bash
+bash install.sh --no-start
+```
 
 ### Manual installation
 
 ```bash
 # Python deps
-pip install --user Pillow psutil
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 
 # udev rules (run once, requires sudo)
 sudo cp udev/99-thermaltake-lcd.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 
-# Add yourself to plugdev if not already a member
+# Optional fallback if desktop uaccess is unavailable
 sudo usermod -aG plugdev $USER   # log out and back in after this
 
 # systemd user services
@@ -111,8 +119,16 @@ systemctl --user enable --now tt-lcd-aio.service
 ### Running without systemd
 
 ```bash
-python3 tt-lcd-rc-pro.py
-python3 tt-lcd-aio.py
+.venv/bin/python tt-lcd-rc-pro.py
+.venv/bin/python tt-lcd-aio.py
+
+# Send one frame and exit; useful for controlled probing
+.venv/bin/python tt-lcd-rc-pro.py --once
+.venv/bin/python tt-lcd-aio.py --once
+
+# Read-only discovery and permission check; sends no HID reports
+.venv/bin/python tt-lcd-rc-pro.py --check
+.venv/bin/python tt-lcd-aio.py --check
 ```
 
 ---
@@ -126,6 +142,24 @@ Edit the constants near the top of each script:
 | `INTERVAL` | `2` | Seconds between frame updates |
 | `FONT_L` | DejaVu Sans Bold | Bold font path (temperatures) |
 | `FONT_R` | DejaVu Sans | Regular font path (labels, bars) |
+
+Advanced protocol probes are controlled through environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `TT_LCD_INIT_MODE` | `feature` | Initialization transport: `feature`, `output`, or `raw` |
+| `TT_LCD_REPORT_MODE` | `legacy` | Output formatting: `legacy`, `zero-prefix`, or experimental `zero-strip` |
+| `TT_LCD_CONTROL_INTERFACE` | `0` | Preferred HID control interface number |
+| `TT_LCD_DATA_INTERFACE` | `1` | Preferred HID frame-data interface number |
+| `TT_LCD_AUTO_RESET` | unset | Set to `1` to allow USB reset after repeated errors |
+
+The non-default modes are diagnostic options. Test them with `--once` before using them in a service.
+
+`zero-prefix` prepends the zero report-number byte required by unnumbered hidraw report descriptors while preserving the complete protocol payload. `zero-strip` is retained only to reproduce an earlier experiment that replaced the first payload byte.
+
+### Compatibility status
+
+The original `264a:232a` and `264a:2328` protocol paths come from the initial reverse engineering. The additional `264a:233d` and `264a:233c` IDs use the same display families but may require different initialization or report modes. Confirm `--check` first, keep the service disabled, and require a successful `--once` run before enabling continuous updates.
 
 ---
 
@@ -150,15 +184,15 @@ systemctl --user restart tt-lcd-aio.service
 
 **Device not found**
 ```
-ERROR: Thermaltake RC Pro (USB 264a:232a) not found.
+ERROR: Thermaltake RC/Bar LCD (USB 264a:233d, 264a:232a) not found.
 ```
-Check that the udev rules are installed, your user is in `plugdev`, and you have logged out and back in since adding yourself to the group.
+Check that the udev rules are installed and the device is connected. If active-session access is unavailable and you use the `plugdev` fallback, confirm group membership and log out and back in after adding the group.
 
 **ETIMEDOUT on write**
-The RC Pro's interrupt OUT endpoint timed out. This usually means the init sequence was interrupted or a previous run left the device in a bad state. The script will attempt a `USBDEVFS_RESET` automatically after two consecutive errors. You can also unplug and replug the USB cable.
+The display's interrupt OUT endpoint timed out. This usually means the init sequence or interface selection does not match the device, or a previous run left it in an intermediate state. Automatic USB reset is disabled by default because it disrupts the device; set `TT_LCD_AUTO_RESET=1` only for a deliberate recovery test. You can also stop the service and unplug and replug the USB cable.
 
 **Permission denied on /dev/hidraw***
-Your user is not in the `plugdev` group, or the udev rules haven't been reloaded. Run `sudo udevadm control --reload-rules && sudo udevadm trigger`, then confirm with `groups`.
+The udev rules may not be installed or reloaded, active-session `uaccess` may be unavailable, or the user may not belong to the fallback `plugdev` group. Reload the rules, reconnect the device, and inspect the hidraw node permissions before retrying.
 
 **Display stays blank**
 Check that the last-chunk flag is being sent (it should be in this version). Try restarting the service — if the device was in an intermediate state from a previous run, the reset on the second error will recover it.

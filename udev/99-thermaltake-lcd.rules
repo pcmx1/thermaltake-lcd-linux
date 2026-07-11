@@ -2,10 +2,14 @@
 # Install: sudo cp 99-thermaltake-lcd.rules /etc/udev/rules.d/
 #          sudo udevadm control --reload-rules && sudo udevadm trigger
 
-# RC Pro 3.9" (264a:232a)
-SUBSYSTEM=="usb",    ATTRS{idVendor}=="264a", ATTRS{idProduct}=="232a", MODE="0660", GROUP="plugdev"
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="232a", MODE="0660", GROUP="plugdev"
+# RC Pro 3.9" / Bar TFT LCD (264a:232a, 264a:233d)
+SUBSYSTEM=="usb",    ATTRS{idVendor}=="264a", ATTRS{idProduct}=="232a", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="232a", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb",    ATTRS{idVendor}=="264a", ATTRS{idProduct}=="233d", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="233d", MODE="0660", GROUP="plugdev", TAG+="uaccess"
 
-# AIO cooler LCD (264a:2328)
-SUBSYSTEM=="usb",    ATTRS{idVendor}=="264a", ATTRS{idProduct}=="2328", MODE="0660", GROUP="plugdev"
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="2328", MODE="0660", GROUP="plugdev"
+# AIO cooler LCD / Round TFT LCD (264a:2328, 264a:233c)
+SUBSYSTEM=="usb",    ATTRS{idVendor}=="264a", ATTRS{idProduct}=="2328", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="2328", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb",    ATTRS{idVendor}=="264a", ATTRS{idProduct}=="233c", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="233c", MODE="0660", GROUP="plugdev", TAG+="uaccess"
