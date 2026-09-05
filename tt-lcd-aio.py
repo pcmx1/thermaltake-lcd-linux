@@ -19,6 +19,7 @@ Chunk header (8 bytes prepended to each 1016-byte JPEG slice):
 """
 
 import time
+import subprocess
 import io
 import os
 import sys
@@ -33,14 +34,26 @@ W, H     = 480, 480
 CHUNK    = 1016
 INTERVAL = 2          # seconds between frame updates
 
-FONT_L = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
-FONT_R = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+FONT_L = '/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf'
+FONT_R = '/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf'
 
 USB_VID, USB_PID = 0x264a, 0x2328   # Thermaltake AIO
 
 # ── HID ioctl numbers (/usr/include/linux/hidraw.h) ───────────────────────────
-HIDIOCSFEATURE = lambda n: (3 << 30) | (n << 16) | (0x48 << 8) | 0x06
-HIDIOCGFEATURE = lambda n: (3 << 30) | (n << 16) | (0x48 << 8) | 0x07
+HIDIOCSFEATURE = lambda n: 0xC0004806 | (n << 16)
+HIDIOCGFEATURE = lambda n: 0xC0004807 | (n << 16)
+
+def unbind_hid_generic():
+    """Unbind hid-generic driver automatically from any matching device."""
+    base = '/sys/bus/hid/drivers/hid-generic'
+    if os.path.exists(base):
+        for entry in os.listdir(base):
+            if '264A:2328' in entry.upper():
+                try:
+                    with open(os.path.join(base, 'unbind'), 'w') as f:
+                        f.write(entry)
+                except Exception:
+                    pass
 
 # ── Feature Report payloads (64 bytes each, report ID 0x03) ───────────────────
 CMD_1A      = bytes.fromhex('031a' + '00' * 62)
@@ -53,14 +66,28 @@ assert all(len(c) == 64 for c in (CMD_1A, CMD_0C_480, CMD_0C_NEXT))
 # ── Device discovery ──────────────────────────────────────────────────────────
 
 def find_hidraw(vendor=USB_VID, product=USB_PID):
-    """Return the /dev/hidraw* path for the given USB VID:PID, or None."""
+    """Return the /dev/hidraw* path for the given USB VID:PID, or fallback to direct device."""
+    # 1. Búsqueda directa por sysfs
     for path in glob.glob('/sys/class/hidraw/hidraw*'):
         try:
-            uevent = open(os.path.join(path, 'device', 'uevent')).read()
-            if f'{vendor:04X}:{product:04X}' in uevent.upper():
-                return '/dev/' + os.path.basename(path)
+            for root, _, files in os.walk(os.path.realpath(path)):
+                if 'uevent' in files:
+                    with open(os.path.join(root, 'uevent'), 'r') as f:
+                        txt = f.read().lower()
+                        if f'{vendor:04x}' in txt and f'{product:04x}' in txt:
+                            return '/dev/' + os.path.basename(path)
         except Exception:
             pass
+
+    # 2. Respaldo directo: si /dev/hidraw9 existe y se puede abrir, usarlo directamente
+    if os.path.exists('/dev/hidraw9'):
+        return '/dev/hidraw9'
+
+    # 3. Buscar el último hidraw accesible en el sistema
+    hidraws = glob.glob('/dev/hidraw*')
+    if hidraws:
+        return sorted(hidraws, key=lambda x: int(x.replace('/dev/hidraw', '')))[-1]
+
     return None
 
 
@@ -108,7 +135,7 @@ def hid_get_feature(fd, report_id=0x0f):
 
 def init_display(fd):
     """
-    One-time init sequence.  Write chunks immediately after — no CMD_1D
+    One-time init sequence. Write chunks immediately after — no CMD_1D
     required for the AIO (unlike the RC Pro).
     """
     print('  [init]', end=' ', flush=True)
@@ -136,7 +163,7 @@ def begin_next_frame(fd):
     except Exception:
         pass
     hid_set_feature(fd, CMD_0C_NEXT)
-    time.sleep(0.02)
+    time.sleep(0.05)  # Aumentado de 0.02 a 0.05 para evitar desbordar el buffer USB
 
 
 def send_chunks(fd, jpeg_bytes):
@@ -171,8 +198,14 @@ def send_chunks(fd, jpeg_bytes):
 # ── Sensor helpers ────────────────────────────────────────────────────────────
 
 def get_temps():
-    t    = psutil.sensors_temperatures()
-    cpu  = next((e.current for e in t.get('k10temp', []) if e.label == 'Tctl'), None)
+    t = psutil.sensors_temperatures()
+    # Intel usa 'coretemp' (Package id 0), AMD usa 'k10temp' (Tctl)
+    cpu = next((e.current for e in t.get('coretemp', []) if 'Package' in e.label), None)
+    if cpu is None:
+        cpu = next((e.current for e in t.get('coretemp', [])), None)
+    if cpu is None:
+        cpu = next((e.current for e in t.get('k10temp', []) if e.label == 'Tctl'), None)
+
     gpu  = next((e.current for e in t.get('amdgpu',  []) if e.label == 'edge' and e.high == 100.0), None)
     nvme = next((e.current for e in t.get('nvme',    []) if e.label == 'Composite'), None)
     return cpu, gpu, nvme
@@ -284,7 +317,7 @@ def make_frame():
     img = black
 
     # Rotate 180° — the AIO cooler mounts the display inverted
-    img = img.rotate(180)
+    img = img.rotate(0)
     return img
 
 
@@ -297,6 +330,7 @@ def encode_jpeg(img):
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def main():
+    unbind_hid_generic()
     hidraw = find_hidraw()
     if hidraw is None:
         print(f'ERROR: Thermaltake AIO (USB {USB_VID:04x}:{USB_PID:04x}) not found.')
@@ -308,12 +342,13 @@ def main():
     time.sleep(0.5)
 
     fd = None
-    first_frame        = True
+    first_frame         = True
     consecutive_errors = 0
 
     while True:
         try:
             if fd is None:
+                unbind_hid_generic()
                 if not os.path.exists(hidraw):
                     raise FileNotFoundError(f'{hidraw} not found')
                 fd = os.open(hidraw, os.O_RDWR)
