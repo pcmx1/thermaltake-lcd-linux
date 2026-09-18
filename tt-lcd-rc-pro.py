@@ -61,7 +61,7 @@ def find_hidraw(vendor=USB_VID, product=USB_PID):
     for path in glob.glob('/sys/class/hidraw/hidraw*'):
         try:
             uevent = open(os.path.join(path, 'device', 'uevent')).read()
-            if f'{vendor:04X}:{product:04X}' in uevent.upper():
+            if f'{vendor:08X}:{product:08X}' in uevent.upper():
                 return '/dev/' + os.path.basename(path)
         except Exception:
             pass
@@ -184,10 +184,13 @@ def get_temps():
     return cpu, gpu, nvme
 
 
-def temp_color(t, warn=70, crit=85):
+def c_to_f(c):
+    return c * 9 / 5 + 32
+
+def temp_color(t, warn=158, crit=185):   # °F: 70°C=158, 85°C=185
     if t is None: return '#888888'
-    if t >= crit: return '#ff3333'
-    if t >= warn: return '#ffaa00'
+    if c_to_f(t) >= crit: return '#ff3333'
+    if c_to_f(t) >= warn: return '#ffaa00'
     return '#44ff88'
 
 
@@ -220,7 +223,7 @@ def make_frame():
 
     # ── Left panel: CPU ───────────────────────────────────────────────────────
     draw.text((8, 4),  'CPU TEMP', font=fs, fill='#555555')
-    draw.text((8, 20), f'{cpu_temp:.1f}°' if cpu_temp else 'N/A',
+    draw.text((8, 20), f'{c_to_f(cpu_temp):.1f}°' if cpu_temp else 'N/A',
               font=fl, fill=temp_color(cpu_temp))
 
     draw.text((8, 58), f'LOAD  {cpu_pct:.0f}%', font=fm, fill='#aaaaaa')
@@ -233,12 +236,12 @@ def make_frame():
 
     # ── Right panel: GPU + NVMe + time ────────────────────────────────────────
     draw.text((248, 4),  'GPU TEMP', font=fs, fill='#555555')
-    draw.text((248, 20), f'{gpu_temp:.1f}°' if gpu_temp else 'N/A',
-              font=fl, fill=temp_color(gpu_temp, warn=75, crit=90))
+    draw.text((248, 20), f'{c_to_f(gpu_temp):.1f}°' if gpu_temp else 'N/A',
+              font=fl, fill=temp_color(gpu_temp, warn=167, crit=194))
 
     draw.text((248, 62), 'NVME', font=fs, fill='#555555')
-    draw.text((248, 78), f'{nvme_temp:.1f}°' if nvme_temp else 'N/A',
-              font=fm, fill=temp_color(nvme_temp, warn=55, crit=70))
+    draw.text((248, 78), f'{c_to_f(nvme_temp):.1f}°' if nvme_temp else 'N/A',
+              font=fm, fill=temp_color(nvme_temp, warn=131, crit=158))
 
     now = datetime.now()
     draw.text((248, 100), now.strftime('%H:%M:%S'), font=fm, fill='#444444')
@@ -257,10 +260,10 @@ def encode_jpeg(img):
 
 def main():
     hidraw = find_hidraw()
-    if hidraw is None:
-        print(f'ERROR: Thermaltake RC Pro (USB {USB_VID:04x}:{USB_PID:04x}) not found.')
-        print('       Check udev rules and that the device is connected.')
-        sys.exit(1)
+    while hidraw is None:
+        print(f'Waiting for Thermaltake RC Pro (USB {USB_VID:04x}:{USB_PID:04x})...')
+        time.sleep(10)
+        hidraw = find_hidraw()
 
     print(f'tt-lcd-rc-pro: {hidraw}  {W}×{H}  update={INTERVAL}s')
     psutil.cpu_percent()   # warm-up call (first call always returns 0.0)

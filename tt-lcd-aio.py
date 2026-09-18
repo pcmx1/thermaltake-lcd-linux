@@ -57,7 +57,7 @@ def find_hidraw(vendor=USB_VID, product=USB_PID):
     for path in glob.glob('/sys/class/hidraw/hidraw*'):
         try:
             uevent = open(os.path.join(path, 'device', 'uevent')).read()
-            if f'{vendor:04X}:{product:04X}' in uevent.upper():
+            if f'{vendor:08X}:{product:08X}' in uevent.upper():
                 return '/dev/' + os.path.basename(path)
         except Exception:
             pass
@@ -178,10 +178,13 @@ def get_temps():
     return cpu, gpu, nvme
 
 
-def temp_color(t, warn=70, crit=85):
+def c_to_f(c):
+    return c * 9 / 5 + 32
+
+def temp_color(t, warn=158, crit=185):   # °F: 70°C=158, 85°C=185
     if t is None: return '#888888'
-    if t >= crit: return '#ff3333'
-    if t >= warn: return '#ffaa00'
+    if c_to_f(t) >= crit: return '#ff3333'
+    if c_to_f(t) >= warn: return '#ffaa00'
     return '#44ff88'
 
 
@@ -238,7 +241,7 @@ def make_frame():
 
     # ── CPU (top arc) ─────────────────────────────────────────────────────────
     ctext(28, 'CPU', fmed, '#505050')
-    ctext(50, f'{cpu_temp:.1f}°' if cpu_temp else 'N/A',
+    ctext(50, f'{c_to_f(cpu_temp):.1f}°' if cpu_temp else 'N/A',
           fhuge, temp_color(cpu_temp))
 
     # ── Load + RAM bars ───────────────────────────────────────────────────────
@@ -261,16 +264,16 @@ def make_frame():
     draw.line([(CX - 80, 292), (CX + 80, 292)], fill='#1e1e1e', width=1)
 
     LX, RX = 100, 380
-    nc = temp_color(nvme_temp, warn=55, crit=70)
+    nc = temp_color(nvme_temp, warn=131, crit=158)
     col_ctext(LX, 230, 'NVMe', fsm, '#404040')
-    col_ctext(LX, 250, f'{nvme_temp:.1f}°' if nvme_temp else 'N/A', fbig, nc)
+    col_ctext(LX, 250, f'{c_to_f(nvme_temp):.1f}°' if nvme_temp else 'N/A', fbig, nc)
 
     col_ctext(RX, 230, now.strftime('%H:%M'), fbig, '#484848')
     col_ctext(RX, 264, now.strftime(':%S'),   fsm,  '#282828')
 
     # ── GPU (bottom arc) ──────────────────────────────────────────────────────
-    ctext(302, f'{gpu_temp:.1f}°' if gpu_temp else 'N/A',
-          fhuge, temp_color(gpu_temp, warn=75, crit=90))
+    ctext(302, f'{c_to_f(gpu_temp):.1f}°' if gpu_temp else 'N/A',
+          fhuge, temp_color(gpu_temp, warn=167, crit=194))
     ctext(378, 'GPU', fmed, '#505050')
 
     # ── Date (bottom, near bezel) ─────────────────────────────────────────────
@@ -298,10 +301,10 @@ def encode_jpeg(img):
 
 def main():
     hidraw = find_hidraw()
-    if hidraw is None:
-        print(f'ERROR: Thermaltake AIO (USB {USB_VID:04x}:{USB_PID:04x}) not found.')
-        print('       Check udev rules and that the device is connected.')
-        sys.exit(1)
+    while hidraw is None:
+        print(f'Waiting for Thermaltake AIO (USB {USB_VID:04x}:{USB_PID:04x})...')
+        time.sleep(10)
+        hidraw = find_hidraw()
 
     print(f'tt-lcd-aio: {hidraw}  {W}×{H}  update={INTERVAL}s')
     psutil.cpu_percent()   # warm-up call (first call always returns 0.0)
