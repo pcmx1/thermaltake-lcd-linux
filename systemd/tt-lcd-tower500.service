@@ -1,0 +1,14 @@
+[Unit]
+Description=Thermaltake Tower 500 bar LCD temperature monitor (264a:233d)
+After=default.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/bin/python3 /home/sean/thermaltake-lcd-linux/tt-lcd-tower500.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

@@ -9,3 +9,9 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="232a", MODE="06
 # AIO cooler LCD (264a:2328)
 SUBSYSTEM=="usb",    ATTRS{idVendor}=="264a", ATTRS{idProduct}=="2328", MODE="0660", GROUP="plugdev"
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="2328", MODE="0660", GROUP="plugdev"
+# Force usbhid binding for AIO — it sometimes fails to auto-bind after USB resets
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="2328", RUN+="/bin/sh -c 'echo %k:1.0 > /sys/bus/usb/drivers/usbhid/bind 2>/dev/null; true'"
+
+# Tower 500 bar LCD (264a:233d) — two interfaces (:1.0 command, :1.1 frame)
+SUBSYSTEM=="usb",    ATTRS{idVendor}=="264a", ATTRS{idProduct}=="233d", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="233d", MODE="0660", GROUP="plugdev"
